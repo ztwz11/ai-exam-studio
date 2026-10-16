@@ -1,0 +1,18 @@
+[
+  {
+    "id": "simple-math",
+    "name": "계산 결과 형식",
+    "material": "17 × 23을 계산합니다.",
+    "prompt": "계산 결과를 숫자만 답하세요.",
+    "mockResponse": "391",
+    "expect": {"equals": "391"}
+  },
+  {
+    "id": "grounded-json",
+    "name": "자료 기반 JSON",
+    "material": "작업 J17의 상태는 승인입니다.",
+    "prompt": "작업 ID와 상태를 JSON 객체 하나로 답하세요. 코드 블록 없이 출력하세요.",
+    "mockResponse": "{\"id\":\"J17\",\"status\":\"승인\"}",
+    "expect": {"json": true, "contains": ["J17", "승인"], "notContains": ["J18"]}
+  }
+]

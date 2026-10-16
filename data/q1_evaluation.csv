@@ -1,0 +1,5 @@
+﻿model,request_type,requests,correct,severe_errors,recorded_cost_won
+A,simple,900,855,0,3600
+A,complex,100,70,4,3600
+B,simple,100,98,0,600
+B,complex,900,675,6,27000

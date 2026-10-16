@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>테스트 하네스 · AI Exam Studio</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/harness.css"></head>
+<body><header class="topbar"><a class="brand" href="/"><span class="brand-icon">a<span>i</span></span><span>EXAM <b>STUDIO</b></span></a><span class="connection">TEST HARNESS</span><a class="text-button" href="/">시험실로 돌아가기 →</a></header>
+<main class="harness-layout"><div class="eyebrow">REPEATABLE PROMPT TESTS</div><h1>프롬프트와 제한을 검증하는 실험실</h1><p class="harness-lead">테스트 사례를 반복 실행하고 답변, 응답 시간, 토큰 수를 비교하세요. 시험 답안과 별도로 기록됩니다.</p>
+<div class="harness-columns"><section class="setup-card"><h2>실행 설정</h2><form id="harnessForm">
+<label>실행 방식<select id="runMode"><option value="mock">모의 실행 · Codex 호출 없음</option><option value="live">실제 Codex CLI · 계정 사용량 소모</option></select></label>
+<div class="field-row"><label>입력 한도 · 토큰<input id="inputTokens" type="number" min="128" max="32768" value="4096" required></label><label>표시 답변 한도 · 토큰<input id="outputTokens" type="number" min="32" max="8192" value="1024" required></label></div>
+<label>사례별 반복 횟수<input id="repeats" type="number" min="1" max="3" value="1" required></label>
+<div class="info-box"><div><strong>토큰 수의 기준</strong><p>o200k_base로 계산한 자료·대화·지침의 토큰 수입니다. Codex 내부 문맥은 제외됩니다. 출력은 받은 답변을 제한하며, 생성 토큰이나 비용의 상한은 아닙니다.</p></div></div>
+<p class="harness-note">모의 실행은 mockResponse를 사용해 제한·검증 동작을 확인합니다. 모델 성능을 평가하지 않습니다. 실제 실행에는 기대 답과 mockResponse를 전달하지 않습니다.</p>
+<button id="runHarness" class="primary start-button" type="submit">테스트 실행 →</button><button id="cancelHarness" class="outline-button hidden" type="button">실행 중단</button>
+</form></section>
+<section class="setup-card cases-card"><div class="attachment-head"><h2>테스트 사례</h2><button id="resetCases" class="text-button">기본 사례 불러오기</button></div><label for="cases">JSON · 최대 10개 / 반복 최대 3회</label><textarea id="cases" spellcheck="false" aria-label="테스트 사례 JSON"></textarea><details><summary>사례 작성 방법</summary><p>id, prompt는 필수입니다. material은 제공 자료, expect.equals는 정확한 기대 답, contains/notContains는 포함/제외할 문구 배열입니다. json, blocked, truncated는 true/false, includedTurns/droppedTurns는 문답 수입니다. 입력·답변 한도는 사례별로 덮어쓸 수 있습니다. modes가 ["mock"]인 사례는 실제 실행에서 제외됩니다.</p></details></section></div>
+<section class="setup-card harness-results"><div class="attachment-head"><h2>실행 결과</h2><button id="downloadReport" class="text-button" disabled>JSON 다운로드 ↓</button></div><p id="harnessStatus" role="status">아직 실행하지 않았습니다.</p><div id="harnessSummary" class="result-stats"></div><div class="table-wrap"><table class="result-table"><thead><tr><th>사례 / 반복</th><th>결과</th><th>시간</th><th>입력 토큰</th><th>답변 토큰<br>표시 / 원본</th><th>CLI 사용량<br>입력 / 출력</th></tr></thead><tbody id="harnessRows"></tbody></table></div><div id="harnessDetails"></div></section>
+</main><div id="toast" class="toast hidden" role="alert"></div><script type="module" src="/harness.js"></script></body></html>

@@ -1,0 +1,13 @@
+# Local sessions, uploaded files, private answers and generated questions
+.local/
+node_modules/
+.playwright-mcp/
+.env
+.env.*
+!.env.example
+.codex/
+.agents/
+*.log
+*.tmp
+Thumbs.db
+.DS_Store

@@ -1,0 +1,16 @@
+.harness-layout{max-width:1240px;margin:auto;padding:42px 28px 60px}
+.harness-layout>h1{font-size:30px;letter-spacing:-1px;margin:14px 0}
+.harness-lead{font-size:13px;color:#7f8fa5;line-height:1.9;margin-bottom:30px}
+.harness-columns{display:grid;grid-template-columns:370px 1fr;gap:22px;align-items:start}
+.harness-columns h2,.harness-results h2{margin:0 0 22px}
+.cases-card h2{margin-bottom:12px}
+#cases{width:100%;min-height:470px;margin-top:14px;border:1px solid #dce4f1;border-radius:8px;padding:16px;font:11px/1.8 Consolas,"Malgun Gothic",monospace;resize:vertical;background:#fafcff;color:#4a6183}
+.harness-note{font-size:11px;line-height:1.8;color:#8a97aa;margin-top:16px}
+.harness-results{margin-top:24px}
+.harness-results>p{font-size:12px;color:#7e8fa7}
+.harness-layout details{border-top:1px solid #e5eaf1;padding:15px 0;font-size:11px;line-height:1.8}
+.harness-layout summary{cursor:pointer;color:#566e92}
+.harness-layout pre{background:#f6f8fc;padding:15px;border-radius:7px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto}
+#cancelHarness{display:block;margin:15px auto 0}
+.harness-results td{font-variant-numeric:tabular-nums}
+@media(max-width:850px){.harness-columns{grid-template-columns:1fr}.harness-layout{padding:30px 18px}.harness-layout>h1{font-size:24px}.harness-results{padding:18px}#cases{min-height:300px}.harness-layout .topbar{padding:0 16px}}

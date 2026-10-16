@@ -1,0 +1,22 @@
+{
+  "name": "ai-exam-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:integration": "node test/integration-check.mjs",
+    "test:cli": "node test/cli-smoke.mjs",
+    "harness": "node harness-cli.mjs",
+    "harness:live": "node harness-cli.mjs --live",
+    "check": "node --test test/*.test.mjs && node test/integration-check.mjs && node test/grading-http-check.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "js-tiktoken": "1.0.21",
+    "pdfjs-dist": "6.4.299"
+  }
+}

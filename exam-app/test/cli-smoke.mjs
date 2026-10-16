@@ -1,0 +1,16 @@
+import {spawn} from 'node:child_process';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {join,resolve} from 'node:path';
+import {tmpdir} from 'node:os';
+import {findCodex,makeArgs} from '../codex.mjs';
+const directory=mkdtempSync(join(tmpdir(),'exam-cli-check-'));
+const runner=findCodex();
+const child=spawn(runner.command,[...runner.prefix,...makeArgs(directory)],{windowsHide:true,stdio:['pipe','pipe','pipe']});
+let stderr='',output='';
+const timer=setTimeout(()=>child.kill(),45000);
+child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');
+child.stdout.on('data',chunk=>{output+=chunk;for(const line of chunk.split('\n')){try{const event=JSON.parse(line);console.log(JSON.stringify({type:event.type,message:event.error?.message,itemType:event.item?.type,text:event.item?.type==='agent_message'?event.item.text:undefined}));}catch{}}});
+child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-5000);});
+child.stdin.end('2+2의 결과 숫자만 답하세요.');
+child.on('error',error=>console.log(error.message));
+child.on('close',code=>{clearTimeout(timer);console.log('Exit:',code);console.log(stderr.replace(/Bearer\s+\S+|sk-[A-Za-z0-9_-]+/g,'[redacted]'));const target=resolve(directory);if(target.startsWith(resolve(tmpdir())+ '\\')||target.startsWith(resolve(tmpdir())+'/'))rmSync(target,{recursive:true,force:true});});

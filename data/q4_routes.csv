@@ -1,0 +1,13 @@
+﻿route,group,quality_pct,x_calls_per_request,y_calls_per_request,l_calls_per_request,external
+X,A,92,1,0,0,true
+X,B,85,1,0,0,true
+X,C,,1,0,0,true
+Y,A,99,0,1,0,true
+Y,B,99,0,1,0,true
+Y,C,,0,1,0,true
+X_then_Y,A,98,1,0.2,0,true
+X_then_Y,B,96.5,1,0.5,0,true
+X_then_Y,C,,1,,0,true
+L,A,97,0,0,1,false
+L,B,94,0,0,1,false
+L,C,98,0,0,1,false

@@ -1,0 +1,4 @@
+﻿group,requests,external_allowed,min_quality_pct
+A,5000,true,97
+B,3000,true,97
+C,2000,false,98
