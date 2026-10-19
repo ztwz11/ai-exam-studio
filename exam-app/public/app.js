@@ -39,7 +39,9 @@ function renderSetup(){
   document.body.classList.remove('exam-active');
   $('loading').classList.add('hidden');$('workspace').classList.add('hidden');$('setup').classList.remove('hidden');
   renderLibrary();
-  $('problemList').innerHTML=(boot.catalog||problems).map((p,i)=>`<label class="problem-item"><input type="checkbox" data-choose-problem="${esc(p.id)}" checked aria-label="${esc(p.title)} 시험에 포함"><span class="problem-number">${i+1}</span><div><strong>${esc(p.title)}</strong><p>${esc(p.category)}</p></div><span>${p.minutes}분 · ${p.points}점</span></label>`).join('');
+  const requested=new URLSearchParams(location.search).get('problem'),preset=(boot.catalog||problems).find(p=>p.id===requested);
+  $('problemList').innerHTML=(boot.catalog||problems).map((p,i)=>`<label class="problem-item"><input type="checkbox" data-choose-problem="${esc(p.id)}" ${!preset||p.id===preset.id?'checked':''} aria-label="${esc(p.title)} 시험에 포함"><span class="problem-number">${i+1}</span><div><strong>${esc(p.title)}</strong><p>${esc(p.category)}</p></div><span>${p.minutes}분 · ${p.points}점</span></label>`).join('');
+  if(preset){$('minutes').value=preset.minutes;if(preset.training?.profile==='round2'){$('questionLimit').value=10;$('attachmentTokenLimit').value=preset.training.materialTokenBudget;$('inputTokenLimit').value=Math.max(8192,preset.training.materialTokenBudget+4096);$('outputTokenLimit').value=2048;}}
   updateSelectionSummary();
 }
 function render(){
@@ -57,6 +59,7 @@ function renderQuestion(){
   $('questionCategory').textContent=`QUESTION 0${session.current+1} / ${p.category}`;
   $('questionTitle').textContent=p.title;$('questionMeta').textContent=`권장 ${p.minutes}분 · ${p.points}점`;$('fileCount').textContent=p.files.length;
   $('problemBody').innerHTML=markdown(p.markdown);
+  $('insertTemplate').classList.toggle('hidden',!p.training?.submissionTemplate);
   renderData();
   $('prompt').value=q.draft;$('answer').value=q.answer;$('notes').value=q.notes;$('done').checked=q.done;
   $('attachments').innerHTML=`<label class="attachment-chip"><input type="checkbox" data-problem ${q.includeProblem?'checked':''}>문제 원문</label>`+p.files.map(f=>`<label class="attachment-chip"><input type="checkbox" data-file="${esc(f.name)}" ${q.attachments.includes(f.name)?'checked':''}>${esc(f.name)} <small>${(f.tokens??0).toLocaleString()}토큰</small></label>`).join('');
@@ -74,6 +77,7 @@ function renderMessages(){
 function renderCounts(){const q=current();$('answerLength').textContent=`${chars(q.answer).toLocaleString()}자`;$('promptLength').textContent=`${chars(q.draft).toLocaleString()}자 · Ctrl+Enter 전송`;$('questionUsage').textContent=`질문 ${used(q)} / ${session.config.questionLimit||'∞'}`;}
 function renderState(){
   const can=editable(),q=current(),limit=session.config.questionLimit,ended=session.status==='submitted';
+  $('insertTemplate').disabled=!can||!!q.answer.trim();
   $('modeBadge').textContent=session.config.mode==='exam'?'실전 모드':'연습 모드';
   $('pauseButton').classList.toggle('hidden',session.config.mode!=='practice'||ended);$('pauseButton').textContent=session.status==='paused'?'재개하기':'일시정지';
   $('submitButton').classList.toggle('hidden',ended);$('resultButton').classList.toggle('hidden',!ended);
@@ -196,6 +200,7 @@ $('resetButton').onclick=()=>{
 };
 $('submitButton').onclick=()=>{const missing=session.questions.filter(q=>!q.answer.trim()).length;openModal('답안을 최종 제출할까요?',`<p>${missing?`아직 답안을 작성하지 않은 문항이 <strong>${missing}개</strong> 있습니다.`:'모든 문항에 답안이 작성되어 있습니다.'}</p><p>제출하면 시간 측정이 끝나고 답안을 수정할 수 없습니다. 작성한 답안, 질문과 응답, 메모를 모두 저장합니다.</p>`,[{label:'계속 풀기',run:()=>$('modal').close()},{label:'최종 제출',primary:true,run:async()=>{try{if(editable())await queueSave();merge(await api('submit',saveData()),{full:true});render();showResults();}catch(error){toast(error.message);}}}]);};
 $('resultButton').onclick=showResults;$('settingsButton').onclick=showSettings;
+$('insertTemplate').onclick=()=>{if(!editable()||current().answer.trim())return;const template=problems[session.current].training?.submissionTemplate;if(template){$('answer').value=template;changed();toast('제출 양식을 넣었습니다. 실제 결과와 검증 기록을 채워주세요.');}};
 $('closeModal').onclick=()=>$('modal').close();
 $('helpButton').onclick=()=>openModal('실전 연습실 이용 안내','<p><strong>1.</strong> 왼쪽에서 문항을 선택하고 문제와 첨부 자료를 읽으세요.<br><strong>2.</strong> AI에 전달할 자료를 선택하고 프롬프트를 작성하세요.<br><strong>3.</strong> 답변을 검증한 뒤 최종 답안 탭에 직접 작성하세요.<br><strong>4.</strong> 제출 후 답안과 대화 기록을 내려받아 복기하세요.</p><p>Codex CLI의 로그인과 이용 한도를 사용합니다. 이 채팅의 대화 기록은 전달되지 않습니다. 매 질문마다 새 CLI 세션을 사용하며, 선택한 최근 문답만 명시적으로 다시 전달합니다.</p><p>AI 응답 실패·취소는 질문 횟수에서 제외합니다. 대기 중에도 시간은 흐르며, 종료 후 도착한 답변은 사용하지 않습니다. 이 도구는 개인 연습용이며 공식 시험 감독·채점 시스템이 아닙니다.</p>');
 $('messages').onclick=async event=>{const target=event.target.closest('[data-message]');if(target){try{await navigator.clipboard.writeText(current().messages.find(m=>m.id===target.dataset.message).text);toast('답변을 복사했습니다.');}catch{toast('복사 권한이 없습니다. 답변을 선택해 복사하세요.');}}};
@@ -205,7 +210,7 @@ $('dataBody').onclick=event=>{
 };
 window.addEventListener('pagehide',()=>{if(editable())fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json','X-Exam-Token':token},body:JSON.stringify(saveData()),keepalive:true}).catch(()=>{});});
 setInterval(updateTimer,250);setInterval(poll,2000);
-try{boot=await api('bootstrap');token=boot.token;problems=boot.problems;merge(boot,{full:true});$('connection').textContent='Codex CLI 연결';render();if(session?.status==='submitted')showResults();}catch(error){$('loading').textContent=`연결할 수 없습니다. ${error.message}`;}
+try{boot=await api('bootstrap');token=boot.token;problems=boot.problems;merge(boot,{full:true});$('connection').textContent='Codex CLI 연결';const prepare=new URLSearchParams(location.search).get('problem');if(boot.catalog.some(p=>p.id===prepare)&&(!session||session.status==='submitted'))renderSetup();else{render();if(session?.status==='submitted')showResults();}}catch(error){$('loading').textContent=`연결할 수 없습니다. ${error.message}`;}
 
 function fileCard(f,i){
   const meta=`${f.kind?.toUpperCase()||'자료'} · ${f.pages?f.pages.length+'페이지 · ':''}${(f.tokens??0).toLocaleString()}토큰`;

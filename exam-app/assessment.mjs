@@ -17,7 +17,7 @@ export function validateAnswerKey(value,points){
   return {referenceAnswer:str(value.referenceAnswer,'모범 답안'),explanation:str(value.explanation,'해설'),criteria};
 }
 // Explicit projection: secret fields are never copied into the exam or author APIs.
-export function publicProblem(p){return {id:p.id,title:p.title,category:p.category,minutes:p.minutes,points:p.points,markdown:p.markdown,generatedAt:p.generatedAt,files:p.files.map(f=>({id:f.id,name:f.name,text:f.text,kind:f.kind,tokens:f.tokens,size:f.size,pages:f.pages?.map(page=>({number:page.number,text:page.text})),warnings:f.warnings}))};}
+export function publicProblem(p){return {id:p.id,title:p.title,category:p.category,minutes:p.minutes,points:p.points,markdown:p.markdown,generatedAt:p.generatedAt,training:p.training?.profile==='round2'?{profile:'round2',track:p.training.track,output:p.training.output,dataRows:p.training.dataRows,materialTokenBudget:p.training.materialTokenBudget,checkedAt:p.training.checkedAt,submissionTemplate:p.training.submissionTemplate}:undefined,files:p.files.map(f=>({id:f.id,name:f.name,text:f.text,kind:f.kind,tokens:f.tokens,size:f.size,pages:f.pages?.map(page=>({number:page.number,text:page.text})),warnings:f.warnings}))};}
 export function problemFingerprint(p){return createHash('sha256').update(JSON.stringify({title:p.title,points:p.points,markdown:p.markdown,files:p.files.map(f=>({name:f.name,text:f.text}))})).digest('hex');}
 function parseJSON(text,label){try{return JSON.parse(text);}catch{throw new AppError(`${label} JSON 형식이 올바르지 않습니다.`,502);}}
 const options=(instructions,schema,signal)=>({model:ASSESSMENT_MODEL,reasoningEffort:ASSESSMENT_EFFORT,instructions,outputSchema:schema,signal,timeoutMs:480000});

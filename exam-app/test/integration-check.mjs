@@ -5,8 +5,10 @@ import {join,resolve,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {pdfFixture} from './pdf-fixture.mjs';
+import {ROUND2_TEMPLATE} from '../round2.mjs';
 const folder=mkdtempSync(join(tmpdir(),'exam-http-check-'));
 const draftProblem={title:'추가 검증 문항',category:'자료 분석',minutes:25,points:25,markdown:'추가 문항의 자료 custom.csv를 읽고 답하세요. '.repeat(8),files:[{name:'custom.csv',text:'name,value\nnew,42',kind:'csv',tokens:12}]};
+draftProblem.training={profile:'round2',track:'analysis',output:'report',dataRows:12,materialTokenBudget:3072,submissionTemplate:ROUND2_TEMPLATE};
 writeFileSync(join(folder,'author-draft.json'),JSON.stringify({id:'draft-test',status:'ready',problem:draftProblem,model:'gpt-6-astra',reasoningEffort:'high'}));
 const port=4321,url=`http://127.0.0.1:${port}`;
 const server=spawn(process.execPath,[fileURLToPath(new URL('../server.mjs',import.meta.url))],{env:{...process.env,PORT:String(port),EXAM_STATE_DIR:folder,EXAM_AUTO_GRADE:'0'},windowsHide:true,stdio:['ignore','pipe','pipe']});
@@ -65,6 +67,8 @@ try{
   await post('pause',{});const resetPaused=await post('reset',{});assert.equal(resetPaused.data.session.status,'running');assert.equal(resetPaused.data.session.deadline,null);sessionId=resetPaused.data.session.id;
   console.log('PASS: 최종 제출, 종료 후 수정 차단, 새 시험, 연습 일시정지·재개, 토큰 예산, 웹 하네스');
   assert.equal((await fetch(url+'/author')).status,200);
+  const authorInfo=await(await fetch(url+'/api/author')).json();assert.equal(authorInfo.round2.tracks.length,3);assert.equal(authorInfo.round2.briefing.checkedAt,'2026-10-19');
+  assert.equal((await post('author/generate',{topic:'검증 주제',profile:'round2',dataRows:13})).status,400);
   assert.equal((await post('author/generate',{topic:''})).status,400);
   assert.equal((await post('author/add',{draftId:'wrong'})).status,409);
   const added=await post('author/add',{draftId:'draft-test'});assert.equal(added.status,200);
@@ -75,6 +79,7 @@ try{
   assert.equal((await post('start',{problemIds:[]})).status,400);
   const selected=await post('start',{mode:'practice',minutes:0,questionLimit:0,problemIds:[added.data.problemId,'Q3']});assert.equal(selected.status,200);sessionId=selected.data.session.id;
   assert.equal(selected.data.session.questions.length,2);assert.equal(selected.data.problems[0].title,draftProblem.title);
+  assert.equal(selected.data.problems[0].training.submissionTemplate,ROUND2_TEMPLATE);
   const generatedContext=await post('context',{question:0,prompt:'자료를 요약하세요.'});assert.equal(generatedContext.status,200);assert.match(generatedContext.data.input,/custom.csv/);assert.doesNotMatch(generatedContext.data.input,/q1_evaluation.csv/);
   assert.equal((await post('save',{question:0,answer:'생성 문항 답안',navigate:1})).status,200);
   assert.equal((await post('save',{question:2,answer:'잘못된 번호'})).status,400);

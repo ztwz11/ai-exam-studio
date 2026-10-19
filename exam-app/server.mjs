@@ -11,6 +11,7 @@ import {parseMaterial,materialTokens} from './materials.mjs';
 import {generateProblem,authorSpec,selectProblems,AUTHOR_MODEL,AUTHOR_EFFORT} from './author.mjs';
 import {AssessmentStore} from './assessment-store.mjs';
 import {publicProblem} from './assessment.mjs';
+import {ROUND2_BRIEFING,ROUND2_TRACKS,ROUND2_OUTPUTS} from './round2.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url)), source=resolve(root,'..');
 const stateDir=process.env.EXAM_STATE_DIR || join(root,'.local');
@@ -70,7 +71,7 @@ const server=http.createServer(async(req,res)=>{
       if(!req.headers['content-type']?.startsWith('application/json'))throw new AppError('JSON 요청이 필요합니다.',415);
     }
     if(req.method==='GET' && path==='/api/bootstrap')return send(200,{...snapshot(),token,catalog:problems.map(publicProblem),connection:{kind:'codex-cli',model:process.env.CODEX_EXAM_MODEL || 'Codex CLI 기본 모델',found:existsSync(findCodex().command)||findCodex().command==='codex'}});
-    if(req.method==='GET' && path==='/api/author')return send(200,{running:!!authorJob,draft:publicAuthorDraft(),model:AUTHOR_MODEL,reasoningEffort:AUTHOR_EFFORT,catalog:problems.map(({id,title,points,minutes,generatedAt})=>({id,title,points,minutes,generatedAt}))});
+    if(req.method==='GET' && path==='/api/author')return send(200,{running:!!authorJob,draft:publicAuthorDraft(),model:AUTHOR_MODEL,reasoningEffort:AUTHOR_EFFORT,round2:{briefing:ROUND2_BRIEFING,tracks:ROUND2_TRACKS.map(({focus,...t})=>t),outputs:ROUND2_OUTPUTS},catalog:problems.map(({id,title,points,minutes,generatedAt,training})=>({id,title,points,minutes,generatedAt,profile:training?.profile}))});
     if(req.method==='GET' && path==='/api/grading'){
       const requested=new URL(req.url,`http://${host}`).searchParams.get('sessionId');
       if(requested!==session?.id)throw new AppError('현재 시험의 결과만 조회할 수 있습니다.',403);

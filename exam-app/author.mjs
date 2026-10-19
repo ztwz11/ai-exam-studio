@@ -2,6 +2,7 @@ import {runCodex} from './codex.mjs';
 import {AppError} from './errors.mjs';
 import {materialTokens} from './materials.mjs';
 import {ANSWER_KEY_SCHEMA,validateAnswerKey} from './assessment.mjs';
+import {round2Options,round2Instructions,validateRound2} from './round2.mjs';
 export const AUTHOR_MODEL='gpt-6-astra',AUTHOR_EFFORT='high';
 export const AUTHOR_SCHEMA={type:'object',additionalProperties:false,required:['title','category','minutes','points','markdown','files'],properties:{title:{type:'string'},category:{type:'string'},minutes:{type:'integer'},points:{type:'integer'},markdown:{type:'string'},files:{type:'array',items:{type:'object',additionalProperties:false,required:['name','text'],properties:{name:{type:'string'},text:{type:'string'}}}}}};
 AUTHOR_SCHEMA.required.push('answerKey');AUTHOR_SCHEMA.properties.answerKey=ANSWER_KEY_SCHEMA;
@@ -9,8 +10,9 @@ const instructions=`당신은 한국어 AI 활용 역량 모의시험 출제자�
 function text(value,name,min,max){if(typeof value!=='string'||value.trim().length<min||value.length>max)throw new AppError(`${name}: ${min}~${max.toLocaleString()}자로 입력하세요.`);return value.trim();}
 function integer(value,name,min,max){const n=Number(value);if(!Number.isInteger(n)||n<min||n>max)throw new AppError(`${name}: ${min}~${max} 사이의 정수여야 합니다.`);return n;}
 export function authorSpec(data={}){
+  const profile=data.profile??'general';if(!['general','round2'].includes(profile))throw new AppError('출제 모드를 선택하세요.');
   const difficulty=data.difficulty??'상급';if(!['중급','상급','최상급'].includes(difficulty))throw new AppError('난이도를 선택하세요.');
-  return {topic:text(data.topic,'주제',2,200),brief:text(data.brief??'','추가 요구',0,5000),difficulty,minutes:integer(data.minutes??25,'권장 시간',5,120),points:integer(data.points??25,'배점',1,100)};
+  return {profile,topic:text(data.topic,'주제',2,200),brief:text(data.brief??'','추가 요구',0,5000),difficulty,minutes:integer(data.minutes??(profile==='round2'?90:25),'권장 시간',5,120),points:integer(data.points??(profile==='round2'?100:25),'배점',profile==='round2'?10:1,100),...(profile==='round2'?round2Options(data):{})};
 }
 export function validateProblem(value){
   if(!value||typeof value!=='object'||Array.isArray(value))throw new AppError('생성 결과가 문제 객체가 아닙니다.');
@@ -29,11 +31,17 @@ export function validateProblem(value){
 export async function generateProblem(data,{signal,runner=runCodex}={}){
   const spec=authorSpec(data),startedAt=Date.now();
   const privateInstructions=instructions.replace('정답, 해설, 풀이, 힌트, 내부 검토 내용은 출력하지 않는다.','문제 markdown과 files에는 정답, 해설, 풀이, 힌트를 절대 포함하지 않는다. 정답과 해설은 비공개 answerKey에만 작성한다. answerKey.referenceAnswer에는 완전한 모범답안, explanation에는 검산한 풀이와 근거, criteria에는 고유 id·평가 항목 label·정수 배점 maxPoints·필수 정답 요소 expected·부분점수 규칙 partialCredit를 넣는다. criteria 배점 합계는 points와 정확히 같아야 한다. 다른 타당한 논증과 결론도 인정할 기준을 작성한다.').replace('수험자가 읽는 문제와 자료만 출력한다.','수험자가 읽는 문제·자료와 비공개 answerKey를 분리하여 출력한다.');
-  const result=await runner(`다음 출제 요구에 맞춰 새 문제 1개와 별도의 비공개 정답·채점 기준을 작성하세요.\n${JSON.stringify(spec)}`,{signal,instructions:privateInstructions+' 공개 markdown/files에는 문항 총배점만 표시하고, 세부 채점 기준·부분점수 규칙·기대 정답 요소는 모두 비공개 answerKey.criteria에만 넣는다.',model:AUTHOR_MODEL,reasoningEffort:AUTHOR_EFFORT,outputSchema:AUTHOR_SCHEMA,timeoutMs:480000});
+  const result=await runner(`다음 출제 요구에 맞춰 새 문제 1개와 별도의 비공개 정답·채점 기준을 작성하세요.\n${JSON.stringify(spec)}`,{signal,instructions:privateInstructions+' 공개 markdown/files에는 문항 총배점만 표시하고, 세부 채점 기준·부분점수 규칙·기대 정답 요소는 모두 비공개 answerKey.criteria에만 넣는다.'+(spec.profile==='round2'?round2Instructions(spec):''),model:AUTHOR_MODEL,reasoningEffort:AUTHOR_EFFORT,outputSchema:AUTHOR_SCHEMA,timeoutMs:480000});
   let parsed;try{parsed=JSON.parse(result.text);}catch{throw new AppError('모델이 유효한 문제 JSON을 반환하지 않았습니다. 다시 생성하세요.',502);}
   const problem=validateProblem(parsed);
   if(problem.minutes!==spec.minutes||problem.points!==spec.points)throw new AppError('생성된 시간 또는 배점이 요청과 다릅니다. 다시 생성하세요.',502);
-  return {problem,answerKey:validateAnswerKey(parsed.answerKey,problem.points),model:AUTHOR_MODEL,reasoningEffort:AUTHOR_EFFORT,usage:result.usage??null,elapsedMs:Date.now()-startedAt,spec};
+  const answerKey=validateAnswerKey(parsed.answerKey,problem.points);
+  if(spec.profile==='round2'){
+    problem.training=validateRound2(problem,answerKey,spec);
+    problem.category=`2차 대비 · ${problem.category}`;
+    problem.markdown='> 공개 안내를 바탕으로 만든 2차 대비 독자 제작 미션입니다. 실제 출제 형식·시간·배점을 뜻하지 않습니다.\n\n'+problem.markdown;
+  }
+  return {problem,answerKey,model:AUTHOR_MODEL,reasoningEffort:AUTHOR_EFFORT,usage:result.usage??null,elapsedMs:Date.now()-startedAt,spec};
 }
 export function selectProblems(catalog,ids){
   if(ids===undefined)return [...catalog];
