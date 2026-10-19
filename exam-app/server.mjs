@@ -3,7 +3,7 @@ import {readFileSync,writeFileSync,mkdirSync,renameSync,existsSync} from 'node:f
 import {dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomBytes} from 'node:crypto';
-import {createSession,tick,assertRunning,buildContext,usedQuestions,AppError} from './core.mjs';
+import {createSession,tick,assertRunning,buildContext,AppError} from './core.mjs';
 import {findCodex} from './codex.mjs';
 import {executeContext} from './bounded-runner.mjs';
 import {runHarness,validateHarness,DEMO_CASES,reportMarkdown} from './harness.mjs';
@@ -12,6 +12,8 @@ import {generateProblem,authorSpec,selectProblems,AUTHOR_MODEL,AUTHOR_EFFORT} fr
 import {AssessmentStore} from './assessment-store.mjs';
 import {publicProblem} from './assessment.mjs';
 import {ROUND2_BRIEFING,ROUND2_TRACKS,ROUND2_OUTPUTS} from './round2.mjs';
+import {ENVIRONMENT_INFO,assertFileAllowed,assertCanAsk} from './environment.mjs';
+import {countTokens} from './tokens.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url)), source=resolve(root,'..');
 const stateDir=process.env.EXAM_STATE_DIR || join(root,'.local');
@@ -70,7 +72,7 @@ const server=http.createServer(async(req,res)=>{
       if(req.headers.origin && req.headers.origin!==`http://${host}`)throw new AppError('다른 사이트에서 보낸 요청은 허용하지 않습니다.',403);
       if(!req.headers['content-type']?.startsWith('application/json'))throw new AppError('JSON 요청이 필요합니다.',415);
     }
-    if(req.method==='GET' && path==='/api/bootstrap')return send(200,{...snapshot(),token,catalog:problems.map(publicProblem),connection:{kind:'codex-cli',model:process.env.CODEX_EXAM_MODEL || 'Codex CLI 기본 모델',found:existsSync(findCodex().command)||findCodex().command==='codex'}});
+    if(req.method==='GET' && path==='/api/bootstrap')return send(200,{...snapshot(),token,environment:ENVIRONMENT_INFO,catalog:problems.map(publicProblem),connection:{kind:'codex-cli',model:session?.config.model||process.env.CODEX_EXAM_MODEL||'gpt-6-astra',found:existsSync(findCodex().command)||findCodex().command==='codex'}});
     if(req.method==='GET' && path==='/api/author')return send(200,{running:!!authorJob,draft:publicAuthorDraft(),model:AUTHOR_MODEL,reasoningEffort:AUTHOR_EFFORT,round2:{briefing:ROUND2_BRIEFING,tracks:ROUND2_TRACKS.map(({focus,...t})=>t),outputs:ROUND2_OUTPUTS},catalog:problems.map(({id,title,points,minutes,generatedAt,training})=>({id,title,points,minutes,generatedAt,profile:training?.profile}))});
     if(req.method==='GET' && path==='/api/grading'){
       const requested=new URL(req.url,`http://${host}`).searchParams.get('sessionId');
@@ -110,6 +112,7 @@ const server=http.createServer(async(req,res)=>{
     }
     if(req.method==='GET' && path==='/api/session')return send(200,snapshot());
     if(req.method==='GET' && path.startsWith('/api/material/')){
+      snapshot();if(session?.status==='running'&&session.config.restrictCopy)throw new AppError('현재 시험은 자료 다운로드를 제한합니다.',403);
       const file=library.find(f=>f.id===path.slice('/api/material/'.length));
       if(!file)throw new AppError('자료를 찾을 수 없습니다.',404);
       res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);
@@ -121,9 +124,13 @@ const server=http.createServer(async(req,res)=>{
       try{
         const data=await body(req,15*1024*1024),problem=problems.find(p=>p.id===data.problemId);
         if(!problem)throw new AppError('자료를 사용할 문항을 선택하세요.');
+        snapshot();
+        const attempt=session&&['running','paused'].includes(session.status)?session:null;
+        if(attempt){active(data);if(attempt.config.allowUploads===false)throw new AppError('이 시험은 시작 후 자료 업로드가 잠겨 있습니다. 등록된 자료만 선택하세요.',409);if(!attempt.questions.some(q=>q.id===problem.id))throw new AppError('현재 시험의 문항에만 자료를 추가할 수 있습니다.',409);assertFileAllowed({name:data.name,size:typeof data.base64==='string'?Buffer.byteLength(data.base64,'base64'):0},attempt.config);}
         if(library.filter(f=>f.problemId===problem.id).length>=20)throw new AppError('문항당 업로드 자료는 최대 20개입니다.');
         if(problem.files.some(f=>f.name===data.name?.trim()))throw new AppError('같은 이름의 자료가 있습니다. 파일 이름을 바꿔 추가하세요.');
         const {file,bytes}=await parseMaterial(data.name,data.base64);
+        if(attempt){active(data);assertFileAllowed(file,attempt.config);}else if(session&&['running','paused'].includes(session.status))throw new AppError('시험이 시작되었습니다. 업로드 설정을 다시 확인하세요.',409);
         Object.assign(file,{id:crypto.randomUUID(),problemId:problem.id});
         writeFileSync(join(uploadDir,file.id),bytes);
         const next=[...library,file];writeFileSync(libraryFile+'.tmp',JSON.stringify(next));renameSync(libraryFile+'.tmp',libraryFile);
@@ -156,7 +163,7 @@ const server=http.createServer(async(req,res)=>{
       session=restarted;persist();return send(200,snapshot());
     }
     if(req.method==='POST' && path==='/api/start'){
-      if(busy||harnessJob)throw new AppError('AI 응답이나 하네스 테스트가 끝난 뒤 새 시험을 시작하세요.',409);
+      if(busy||harnessJob||uploading)throw new AppError('AI 응답·자료 업로드·하네스 테스트가 끝난 뒤 새 시험을 시작하세요.',409);
       const data=await body(req);snapshot();
       if(session && ['running','paused'].includes(session.status))throw new AppError('진행 중인 시험을 먼저 제출하세요.',409);
       if(autoGrade&&session&&['queued','running'].includes(assessment.load(session.id)?.status))throw new AppError('현재 시험의 자동 채점이 끝난 뒤 새 시험을 시작하세요.',409);
@@ -183,6 +190,13 @@ const server=http.createServer(async(req,res)=>{
       if(data.question!==undefined)updateQuestion(questionAt(data.question),data);
       session.status='submitted';session.endedAt=Date.now();session.reason='manual';busy?.controller.abort();persist();return send(200,snapshot());
     }
+    if(req.method==='POST' && path==='/api/prompt-metrics'){
+      const data=await body(req);active(data);const q=questionAt(data.question);
+      if(typeof data.prompt!=='string'||data.prompt.length>20000)throw new AppError('프롬프트 형식이 잘못되었습니다.');
+      const metrics={chars:Array.from(data.prompt).length,tokens:countTokens(data.prompt),valid:true,context:null};
+      if(data.prompt.trim())try{const c=buildContext(problems.find(p=>p.id===q.id),{...q,attachments:data.attachments??q.attachments,includeProblem:data.includeProblem??q.includeProblem},data.prompt,session.config);metrics.context={tokens:c.tokens,limit:c.limit,includedTurns:c.includedTurns,droppedTurns:c.droppedTurns};}catch(error){if(!(error instanceof AppError))throw error;metrics.valid=false;metrics.error=error.message;}
+      return send(200,metrics);
+    }
     if(req.method==='POST' && path==='/api/context'){
       const data=await body(req);active(data);const q=questionAt(data.question);
       const copy={...q,attachments:data.attachments??q.attachments,includeProblem:data.includeProblem??q.includeProblem};
@@ -193,10 +207,12 @@ const server=http.createServer(async(req,res)=>{
       const data=await body(req);active(data);if(busy||harnessJob||authorJob)throw new AppError('진행 중인 AI 작업이 끝난 뒤 질문하세요.',409);
       const q=questionAt(data.question);updateQuestion(q,data);
       if(session.config.readFirst && q.elapsedMs<120000)throw new AppError('이 문항을 먼저 2분간 읽은 뒤 질문할 수 있습니다.',409);
-      if(session.config.questionLimit && usedQuestions(q)>=session.config.questionLimit)throw new AppError('이 문항의 질문 횟수를 모두 사용했습니다.',409);
+      assertCanAsk(session,q);
       const context=buildContext(problems.find(p=>p.id===q.id),q,data.prompt,session.config);
       const message={id:crypto.randomUUID(),role:'user',text:data.prompt.trim(),at:Date.now(),status:'pending',context:{...context,input:undefined,instructions:undefined}};
       q.messages.push(message);q.draft='';
+      session.nextAskAt=Date.now()+(session.config.cooldownSeconds??0)*1000;
+      if(session.config.clearAttachmentsAfterSend)q.attachments=[];
       const controller=new AbortController();busy={question:data.question,startedAt:Date.now(),controller};persist();
       try{
         const result=await executeContext(context,{signal:controller.signal});snapshot();

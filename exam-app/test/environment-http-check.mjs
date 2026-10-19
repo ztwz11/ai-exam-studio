@@ -1,0 +1,43 @@
+import {spawn} from 'node:child_process';
+import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve,sep} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import assert from 'node:assert/strict';
+import {createSession} from '../core.mjs';
+import {ROUND2_ENVIRONMENT} from '../environment.mjs';
+const folder=mkdtempSync(join(tmpdir(),'exam-env-check-')),port=4326,url=`http://127.0.0.1:${port}`;
+const seed=createSession({...ROUND2_ENVIRONMENT,questionLimit:1},[{id:'Q1',files:[]},{id:'Q2',files:[]}]);
+seed.questions[0].messages=[{role:'user',status:'complete',text:'이전 질문'}];
+seed.nextAskAt=Date.now()+300000;
+writeFileSync(join(folder,'current.json'),JSON.stringify(seed));
+const server=spawn(process.execPath,[fileURLToPath(new URL('../server.mjs',import.meta.url))],{env:{...process.env,PORT:String(port),EXAM_STATE_DIR:folder,EXAM_AUTO_GRADE:'0'},windowsHide:true,stdio:['ignore','pipe','pipe']});
+let token,sessionId=seed.id;
+const post=async(path,data={})=>{const r=await fetch(url+'/api/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Exam-Token':token},body:JSON.stringify({sessionId,...data})});return {status:r.status,data:await r.json()};};
+try{
+  await new Promise((res,rej)=>{const t=setTimeout(()=>rej(new Error('start timeout')),10000);server.on('error',rej);server.stdout.on('data',c=>{if(c.toString().includes('AI Exam Studio')){clearTimeout(t);res();}});});
+  const boot=await(await fetch(url+'/api/bootstrap')).json();token=boot.token;
+  assert.equal(boot.environment.preset.promptCharLimit,1000);
+  assert.equal((await post('ask',{question:1,prompt:'질문',questionLimit:99})).status,409);
+  assert.equal((await post('materials',{problemId:'Q1',name:'x.txt',base64:'eA=='})).status,409);
+  const saved=await post('save',{question:0,model:'fake',config:{promptCharLimit:99999},answer:'보존'});
+  assert.equal(saved.data.session.config.promptCharLimit,1000);assert.equal(saved.data.session.config.model,'gpt-6-astra');
+  const metrics=await post('prompt-metrics',{question:0,prompt:'가'.repeat(1001)});
+  assert.equal(metrics.status,200);assert.equal(metrics.data.chars,1001);assert.equal(metrics.data.valid,false);
+  assert.equal((await post('context',{question:0,prompt:'가'.repeat(1001),promptCharLimit:9999})).status,413);
+  const reset=await post('reset');sessionId=reset.data.session.id;
+  assert.equal(reset.data.session.nextAskAt,undefined);assert.deepEqual(reset.data.session.config,seed.config);
+  assert.deepEqual(reset.data.session.questions[0].attachments,[]);
+  const ctx=await post('context',{question:0,prompt:'요약',model:'fake',reasoningEffort:'low'});
+  assert.equal(ctx.data.model,'gpt-6-astra');assert.equal(ctx.data.reasoningEffort,'high');
+  await post('submit');
+  assert.equal((await post('start',{model:'invented'})).status,400);
+  const fresh=await post('start',{...ROUND2_ENVIRONMENT,allowUploads:true,fileSizeLimitMB:1});sessionId=fresh.data.session.id;
+  assert.equal((await post('materials',{problemId:'Q1',name:'big.txt',base64:Buffer.alloc(1024*1024+1,65).toString('base64')})).status,413);
+  const small=await post('materials',{problemId:'Q1',name:'tiny.txt',base64:'eA=='});assert.equal(small.status,201);
+  assert.equal((await fetch(url+'/api/material/'+small.data.file.id)).status,403);
+  console.log('PASS: 고정 모델/한도, 변조 차단, 글자·토큰 측정, 전체 질문 풀, 업로드 정책·크기, 초기화, 다운로드 제한');
+}finally{
+  server.kill();await new Promise(r=>server.once('close',r));
+  const target=resolve(folder);if(target.startsWith(resolve(tmpdir())+sep+'exam-env-check-'))rmSync(target,{recursive:true,force:true});
+}

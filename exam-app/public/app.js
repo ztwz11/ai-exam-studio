@@ -6,6 +6,23 @@ const chars=s=>Array.from(s).length;
 const fmt=ms=>{const seconds=Math.max(0,Math.floor(ms/1000));return `${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;};
 const time=ms=>new Date(ms).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 const used=q=>q.messages.filter(m=>m.role==='user'&&m.status!=='failed').length;
+const usage=()=>session.config.questionLimitScope==='exam'?session.questions.reduce((n,q)=>n+used(q),0):used(current());
+const environmentNumbers=['promptCharLimit','promptTokenLimit','attachmentFileLimit','fileSizeLimitMB','pdfPageLimit','cooldownSeconds'];
+const environmentBooleans=['clearAttachmentsAfterSend','allowUploads','restrictCopy'];
+let metricsTimer,metrics=null,metricsKey='';
+const requestKey=()=>JSON.stringify([session?.id,session?.current,current()?.draft,current()?.attachments,current()?.includeProblem]);
+function applyEnvironment(){
+  for(const [key,value] of Object.entries(boot.environment.preset)){const el=$(key);if(el){if(el.type==='checkbox')el.checked=value;else el.value=value;}}
+  mode='exam';$('examMode').classList.add('selected');$('practiceMode').classList.remove('selected');$('minutes').min=1;$('questionLimit').min=1;
+  toast('공개 가이드 기반 제한을 적용했습니다. 2차 공식 확정값은 아닙니다.');
+}
+function scheduleMetrics(){
+  clearTimeout(metricsTimer);metrics=null;metricsKey=requestKey();
+  if(!editable()||!current().draft.trim()){$('liveMetrics').textContent='';return;}
+  $('liveMetrics').textContent='토큰 계산 중…';
+  const key=metricsKey,data={...saveData(),prompt:current().draft};
+  metricsTimer=setTimeout(async()=>{try{const result=await api('prompt-metrics',data);if(requestKey()!==key)return;metrics=result;renderState();}catch(error){if(requestKey()===key)$('liveMetrics').textContent=error.message;}},300);
+}
 const limitLabel=c=>c.inputTokenLimit?`${c.inputTokenLimit.toLocaleString()}토큰`:`${c.contextLimit?.toLocaleString()}자 (기존 시험)`;
 const contextLabel=c=>c.unit==='tokens'?`${c.tokens.toLocaleString()} / ${c.limit.toLocaleString()}토큰`:`${c.chars.toLocaleString()}자`;
 const current=()=>session?.questions[session.current];
@@ -39,9 +56,11 @@ function renderSetup(){
   document.body.classList.remove('exam-active');
   $('loading').classList.add('hidden');$('workspace').classList.add('hidden');$('setup').classList.remove('hidden');
   renderLibrary();
+  $('environmentNotice').textContent=boot.environment.notice;
+  $('environmentEvidence').innerHTML=boot.environment.evidence.map(e=>`<p><strong>${esc(e.level)}</strong><br>${esc(e.text)}${e.url?` <a href="${esc(e.url)}" target="_blank" rel="noopener">출처 ↗</a>`:''}</p>`).join('');
   const requested=new URLSearchParams(location.search).get('problem'),preset=(boot.catalog||problems).find(p=>p.id===requested);
   $('problemList').innerHTML=(boot.catalog||problems).map((p,i)=>`<label class="problem-item"><input type="checkbox" data-choose-problem="${esc(p.id)}" ${!preset||p.id===preset.id?'checked':''} aria-label="${esc(p.title)} 시험에 포함"><span class="problem-number">${i+1}</span><div><strong>${esc(p.title)}</strong><p>${esc(p.category)}</p></div><span>${p.minutes}분 · ${p.points}점</span></label>`).join('');
-  if(preset){$('minutes').value=preset.minutes;if(preset.training?.profile==='round2'){$('questionLimit').value=10;$('attachmentTokenLimit').value=preset.training.materialTokenBudget;$('inputTokenLimit').value=Math.max(8192,preset.training.materialTokenBudget+4096);$('outputTokenLimit').value=2048;}}
+  if(preset){if(preset.training?.profile==='round2')applyEnvironment();$('minutes').value=preset.minutes;$('materialQuestion').value=preset.id;renderLibrary();}
   updateSelectionSummary();
 }
 function render(){
@@ -66,6 +85,7 @@ function renderQuestion(){
   $('flagButton').classList.toggle('selected',q.flagged);$('flagButton').textContent=q.flagged?'⚑ 검토 표시됨':'⚑ 나중에 검토';
   $('nextQuestion').textContent=session.current===session.questions.length-1?'첫 문항으로 ↑':'다음 문항 →';
   renderMessages();renderCounts();showPane(activePane);showProblemTab(activeProblemTab);
+  scheduleMetrics();
 }
 function renderMessages(){
   const q=current(),box=$('messages'),nearBottom=box.scrollHeight-box.scrollTop-box.clientHeight<100;
@@ -74,8 +94,9 @@ function renderMessages(){
   if(busy?.question===session.current)box.insertAdjacentHTML('beforeend','<div class="waiting"><span class="spinner"></span>Codex가 답변을 작성하고 있습니다…</div>');
   if(nearBottom)box.scrollTop=box.scrollHeight;
 }
-function renderCounts(){const q=current();$('answerLength').textContent=`${chars(q.answer).toLocaleString()}자`;$('promptLength').textContent=`${chars(q.draft).toLocaleString()}자 · Ctrl+Enter 전송`;$('questionUsage').textContent=`질문 ${used(q)} / ${session.config.questionLimit||'∞'}`;}
+function renderCounts(){const q=current();$('answerLength').textContent=`${chars(q.answer).toLocaleString()}자`;$('promptLength').textContent=`${chars(q.draft).toLocaleString()} / ${(session.config.promptCharLimit??10000).toLocaleString()}자 · Ctrl+Enter`;$('questionUsage').textContent=`${session.config.questionLimitScope==='exam'?'전체':'문항'} 질문 ${usage()} / ${session.config.questionLimit||'∞'}`;}
 function renderState(){
+  if($('workspace').classList.contains('hidden'))return;
   const can=editable(),q=current(),limit=session.config.questionLimit,ended=session.status==='submitted';
   $('insertTemplate').disabled=!can||!!q.answer.trim();
   $('modeBadge').textContent=session.config.mode==='exam'?'실전 모드':'연습 모드';
@@ -83,13 +104,19 @@ function renderState(){
   $('submitButton').classList.toggle('hidden',ended);$('resultButton').classList.toggle('hidden',!ended);
   $('endBanner').classList.toggle('hidden',can);$('endBanner').textContent=ended?(session.reason==='timeout'?'제한 시간이 종료되어 현재 답안이 자동 제출되었습니다.':'답안을 제출했습니다. 기록을 검토하거나 결과 파일을 내려받으세요.'):'연습을 일시정지했습니다. 재개하면 시간과 입력이 다시 활성화됩니다.';
   for(const id of ['prompt','answer','notes','done','flagButton'])$(id).disabled=!can;
-  $('attachments').querySelectorAll('input').forEach(el=>el.disabled=!can||!!busy);
+  $('attachments').querySelectorAll('input').forEach(el=>el.disabled=!can);
   const readLock=session.config.readFirst&&q.elapsedMs<120000;
   const attachmentOver=renderAttachmentBudget();
-  $('sendButton').disabled=attachmentOver||!can||!!busy||!q.draft.trim()||!!(limit&&used(q)>=limit)||readLock;
-  $('previewContext').disabled=!can||!q.draft.trim();
+  const cooldown=Math.max(0,Math.ceil(((session.nextAskAt??0)-(Date.now()+offset))/1000));
+  const measured=metricsKey===requestKey()?metrics:null;
+  $('sendButton').disabled=attachmentOver||!can||!!busy||!q.draft.trim()||!!(limit&&usage()>=limit)||readLock||cooldown>0||chars(q.draft)>(session.config.promptCharLimit??10000)||measured?.valid===false;
+  $('sendButton').textContent=cooldown?`${cooldown}초 후 전송`:'질문 보내기 ↑';
+  if(measured){$('liveMetrics').textContent=`프롬프트 ${measured.tokens.toLocaleString()} / ${(session.config.promptTokenLimit??32768).toLocaleString()}토큰${measured.context?` · 전체 입력 ${measured.context.tokens.toLocaleString()} / ${measured.context.limit.toLocaleString()} · 이전 ${measured.context.includedTurns}쌍 포함${measured.context.droppedTurns?` (${measured.context.droppedTurns}쌍 제외)`:''}`:''}${measured.error?` · ${measured.error}`:''}`;$('liveMetrics').classList.toggle('over',!measured.valid);}
+  $('examUpload').disabled=!can||session.config.allowUploads===false;
+  document.body.classList.toggle('restrict-copy',can&&!!session.config.restrictCopy);
+  $('previewContext').disabled=!can||!q.draft.trim()||!!session.config.restrictCopy;
   $('cancelButton').classList.toggle('hidden',!busy||ended);
-  $('contextStatus').textContent=readLock?`먼저 읽기 · ${fmt(120000-q.elapsedMs)} 후 질문 가능`:`입력 ${limitLabel(session.config)} · 표시 답변 ${session.config.outputTokenLimit??1024}토큰 · ${session.config.historyTurns?'최근 최대 2회 문답':'이전 대화 없음'}`;
+  $('contextStatus').textContent=readLock?`먼저 읽기 · ${fmt(120000-q.elapsedMs)} 후 질문 가능`:`${session.config.model??'기존 CLI 기본 모델'} · ${session.config.reasoningEffort??'기본'} · 최근 ${session.config.historyTurns}쌍 · ${session.config.clearAttachmentsAfterSend?'첨부는 이번 질문만':'선택 자료 매번 재전송'}`;
   renderCounts();updateTimer();
 }
 function updateTimer(){
@@ -118,7 +145,7 @@ function queueSave(extra={}){
   const request=saving.catch(()=>{}).then(()=>api('save',data)).then(result=>{offset=result.serverNow-Date.now();if(session?.id===data.sessionId){$('saveStatus').textContent=`저장됨 ${time(Date.now())}`;}return result;});
   saving=request;request.catch(error=>{$('saveStatus').textContent='저장 실패';toast(error.message);});return request;
 }
-function changed(){const q=current();q.answer=$('answer').value;q.notes=$('notes').value;q.draft=$('prompt').value;q.done=$('done').checked;renderCounts();renderState();$('saveStatus').textContent='변경 사항 저장 대기';clearTimeout(saveTimer);saveTimer=setTimeout(()=>queueSave(),400);}
+function changed(){const q=current();q.answer=$('answer').value;q.notes=$('notes').value;q.draft=$('prompt').value;q.done=$('done').checked;scheduleMetrics();renderCounts();renderState();$('saveStatus').textContent='변경 사항 저장 대기';clearTimeout(saveTimer);saveTimer=setTimeout(()=>queueSave(),400);}
 async function navigate(index){
   if(index===session.current)return;
   try{if(editable()){const result=await queueSave({navigate:index});merge(result,{full:true});}else session.current=index;render();}catch(error){toast(error.message);}
@@ -126,7 +153,7 @@ async function navigate(index){
 function openModal(title,html,actions=[]){$('modalTitle').textContent=title;$('modalBody').innerHTML=html;$('modalActions').replaceChildren();for(const action of actions){const button=document.createElement('button');button.textContent=action.label;button.className=action.primary?'primary':'outline-button';button.onclick=action.run;$('modalActions').append(button);}if(!$('modal').open)$('modal').showModal();}
 function download(name,text,type='text/plain;charset=utf-8'){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([text],{type}));a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);}
 function resultMarkdown(){
-  const header=`# AI 활용 역량 모의훈련 결과\n\n- 모드: ${session.config.mode}\n- 시작: ${new Date(session.startedAt).toLocaleString('ko-KR')}\n- 종료: ${new Date(session.endedAt).toLocaleString('ko-KR')}\n- 종료 사유: ${session.reason}\n- 입력 한도: ${limitLabel(session.config)}\n- 표시 답변 한도: ${session.config.outputTokenLimit??1024}토큰 (생성/과금 한도 아님)\n- 토크나이저: o200k_base (Codex 내부 문맥 제외)\n- 질문 한도: 문항당 ${session.config.questionLimit||'무제한'}\n- AI 자동 채점은 연습용 참고 평가입니다.\n`;
+  const header=`# AI 활용 역량 모의훈련 결과\n\n- 모드: ${session.config.mode}\n- 시작: ${new Date(session.startedAt).toLocaleString('ko-KR')}\n- 종료: ${new Date(session.endedAt).toLocaleString('ko-KR')}\n- 종료 사유: ${session.reason}\n- 입력 한도: ${limitLabel(session.config)}\n- 표시 답변 한도: ${session.config.outputTokenLimit??1024}토큰 (생성/과금 한도 아님)\n- 토크나이저: o200k_base (Codex 내부 문맥 제외)\n- 질문 한도: ${session.config.questionLimitScope==='exam'?'시험 전체':'문항당'} ${session.config.questionLimit||'무제한'}\n- 고정 시험 환경(공식 규칙 아님): ${JSON.stringify(session.config)}\n- AI 자동 채점은 연습용 참고 평가입니다.\n`;
   return header+session.questions.map((q,i)=>`\n## ${i+1}번 ${problems[i].title}\n\n사용 시간: ${fmt(q.elapsedMs)} / AI 질문: ${used(q)}회\n\n### 최종 답안\n\n${q.answer||'(미작성)'}\n\n### 검증 메모\n\n${q.notes||'(없음)'}\n\n### AI 활용 기록\n\n${q.messages.map(m=>`#### ${m.role==='user'?'질문':'답변'} · ${time(m.at)}\n\n${m.text}\n${m.status==='failed'?`\n실패: ${m.error}\n`:''}${m.context?`\n문맥 ${contextLabel(m.context)}, 이전 문답 ${m.context.includedTurns}회 포함, ${m.context.droppedTurns}회 제외\n`:''}${m.output?`\n표시/원본 답변: ${m.output.deliveredTokens}/${m.output.originalTokens}토큰, 잘림: ${m.output.truncated}, 응답 시간: ${m.elapsedMs}ms\n`:''}${m.usage?`\nCLI 사용량: ${JSON.stringify(m.usage)}\n`:''}`).join('\n')}`).join('\n');
 }
 function showResults(){
@@ -154,7 +181,10 @@ async function refreshGrading(){
   finally{gradingPolling=false;}
 }
 setInterval(()=>{if($('modal').open&&session?.status==='submitted'&&gradingResult?.status!=='complete')refreshGrading();},2000);
-function showSettings(){if(!session)return;const c=session.config;openModal('현재 시험 설정',`<p>모드: <strong>${c.mode==='exam'?'실전':'연습'}</strong><br>시간: ${c.minutes?`${c.minutes}분`:'무제한'}<br>문항당 질문: ${c.questionLimit||'무제한'}회<br>입력 문맥 한도: ${limitLabel(c)}<br>첨부 자료 한도: ${c.attachmentTokenLimit??3072}토큰<br>표시 답변 한도: ${c.outputTokenLimit??1024}토큰<br>이전 대화: ${c.historyTurns?'최근 최대 2회':'없음'}<br>처음 2분 AI 제한: ${c.readFirst?'사용':'사용하지 않음'}</p><p>토큰은 o200k_base로 계산합니다. 문제·첨부·이전 문답·현재 질문·시험용 지침이 입력에 포함됩니다. Codex 내부 시스템 지침과 메시지 포맷은 제외하므로 CLI가 보고하는 실제 사용량과 다릅니다. 출력은 받은 답변의 표시량을 제한하며 생성·과금 상한이 아닙니다.</p><p>실전 모드에서는 새로고침하거나 브라우저를 닫아도 시간이 흐릅니다. AI 응답 대기 시간도 시험 시간에 포함됩니다.</p>`);}
+function showSettings(){
+  if(!session)return;const c=session.config;
+  openModal('현재 시험 설정 · 시작 후 고정',`<p><strong>연습용 환경 · 2차 공식 일치 미확인</strong></p><p>AI: ${esc(c.model??'기존 CLI 기본 모델')} / ${esc(c.reasoningEffort??'기본')}<br>시간: ${c.minutes?c.minutes+'분':'무제한'}<br>질문: ${c.questionLimitScope==='exam'?'시험 전체':'문항당'} ${c.questionLimit||'무제한'}회 · 전송 간격 ${c.cooldownSeconds??0}초<br>프롬프트: ${c.promptCharLimit??10000}자 / ${c.promptTokenLimit??32768}토큰<br>전체 입력: ${limitLabel(c)}<br>첨부: ${c.attachmentFileLimit??20}개 / ${c.attachmentTokenLimit??3072}토큰 · 파일당 ${c.fileSizeLimitMB??10}MB · PDF ${c.pdfPageLimit??100}페이지<br>표시 답변: ${c.outputTokenLimit??1024}토큰<br>대화 기억: 최근 ${c.historyTurns}쌍 (입력 한도 초과 시 오래된 쌍부터 제외)<br>첨부: ${c.clearAttachmentsAfterSend?'전송 후 선택 해제, 매번 다시 첨부':'선택 자료 매번 재전송'}<br>시험 중 업로드: ${c.allowUploads===false?'잠금':'허용'} · 문제/자료 복사 제한: ${c.restrictCopy?'사용':'미사용'}<br>처음 2분 AI 제한: ${c.readFirst?'사용':'미사용'}</p><p>o200k_base로 문제·첨부·최근 문답·질문·앱 지침을 계산합니다. CLI 내부 문맥은 제외하며 출력 제한은 표시량만 자릅니다. 모델의 실제 생성량·추론 토큰·과금 상한은 아닙니다. 이미지 분석·검색·코드 실행은 지원하지 않습니다.</p><p>새로고침·브라우저 종료·AI 대기 중에도 실전 모드 시간은 흐릅니다. 실패·취소한 요청은 질문 횟수에서 제외하지만 전송 대기는 유지됩니다. 복사 제한은 화면 조작 연습용이며 감독 보안 기능이 아닙니다.</p>`);
+}
 async function poll(){
   if(polling||!session)return;polling=true;
   try{const before=JSON.stringify(current()?.messages),status=session.status,id=session.id,result=await api('session');merge(result);if(session){renderState();if(before!==JSON.stringify(current()?.messages)||busy)renderMessages();if(id!==session.id||status!==session.status){clearTimeout(saveTimer);render();if(session.status==='submitted'){showResults();}}}}catch{$('saveStatus').textContent='서버 연결 확인 필요';}finally{polling=false;}
@@ -167,13 +197,13 @@ async function sendPrompt(){
     // Validate the exact input before locking the UI or consuming a question.
     const context=await api('context',data);
     $('contextStatus').textContent=`이번 문맥 ${contextLabel(context)} · 이전 ${context.includedTurns}회 포함`;
-    busy={question:session.current,startedAt:Date.now()};current().draft='';$('prompt').value='';renderState();renderMessages();
+    busy={question:session.current,startedAt:Date.now()};current().draft='';if(session.config.clearAttachmentsAfterSend){current().attachments=[];$('attachments').querySelectorAll('[data-file]').forEach(el=>el.checked=false);}session.nextAskAt=Date.now()+offset+(session.config.cooldownSeconds??0)*1000;$('prompt').value='';scheduleMetrics();renderState();renderMessages();
     const result=await api('ask',data);merge(result);renderState();renderMessages();renderNav();
   }catch(error){busy=null;toast(error.message);await poll();renderState();}
 }
 $('examMode').onclick=()=>setMode('exam');$('practiceMode').onclick=()=>setMode('practice');
 function setMode(value){mode=value;$('examMode').classList.toggle('selected',mode==='exam');$('practiceMode').classList.toggle('selected',mode==='practice');for(const id of ['minutes','questionLimit']){$(id).min=mode==='exam'?'1':'0';if(mode==='exam'&&Number($(id).value)===0)$(id).value=id==='minutes'?90:3;}}
-$('startForm').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{const result=await api('start',{problemIds:[...$('problemList').querySelectorAll('[data-choose-problem]:checked')].map(el=>el.dataset.chooseProblem),mode,minutes:Number($('minutes').value),questionLimit:Number($('questionLimit').value),inputTokenLimit:Number($('inputTokenLimit').value),outputTokenLimit:Number($('outputTokenLimit').value),attachmentTokenLimit:Number($('attachmentTokenLimit').value),historyTurns:Number($('historyTurns').value),readFirst:$('readFirst').checked});merge(result,{full:true});render();}catch(error){toast(error.message);}finally{button.disabled=false;}};
+$('startForm').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{const result=await api('start',{problemIds:[...$('problemList').querySelectorAll('[data-choose-problem]:checked')].map(el=>el.dataset.chooseProblem),mode,minutes:Number($('minutes').value),questionLimit:Number($('questionLimit').value),inputTokenLimit:Number($('inputTokenLimit').value),outputTokenLimit:Number($('outputTokenLimit').value),attachmentTokenLimit:Number($('attachmentTokenLimit').value),historyTurns:Number($('historyTurns').value),readFirst:$('readFirst').checked,...Object.fromEntries(environmentNumbers.map(k=>[k,Number($(k).value)])),...Object.fromEntries(environmentBooleans.map(k=>[k,$(k).checked])),model:$('model').value,reasoningEffort:$('reasoningEffort').value,questionLimitScope:$('questionLimitScope').value});merge(result,{full:true});render();}catch(error){toast(error.message);}finally{button.disabled=false;}};
 $('questionNav').onclick=event=>{const target=event.target.closest('[data-question]');if(target)navigate(Number(target.dataset.question));};
 $('nextQuestion').onclick=()=>navigate((session.current+1)%session.questions.length);
 for(const pane of ['chat','answer','notes'])$(`${pane}Tab`).onclick=()=>showPane(pane);
@@ -181,7 +211,7 @@ for(const tab of ['problem','data'])$(`${tab}Tab`).onclick=()=>showProblemTab(ta
 for(const id of ['prompt','answer','notes'])$(id).addEventListener('input',changed);
 $('done').onchange=()=>{changed();renderNav();};
 $('flagButton').onclick=()=>{current().flagged=!current().flagged;queueSave();renderNav();$('flagButton').classList.toggle('selected',current().flagged);$('flagButton').textContent=current().flagged?'⚑ 검토 표시됨':'⚑ 나중에 검토';};
-$('attachments').onchange=()=>{current().includeProblem=$('attachments').querySelector('[data-problem]').checked;current().attachments=[...$('attachments').querySelectorAll('[data-file]:checked')].map(el=>el.dataset.file);queueSave();renderState();};
+$('attachments').onchange=()=>{current().includeProblem=$('attachments').querySelector('[data-problem]').checked;current().attachments=[...$('attachments').querySelectorAll('[data-file]:checked')].map(el=>el.dataset.file);scheduleMetrics();queueSave();renderState();};
 $('previewContext').onclick=async()=>{try{const data={...saveData(),prompt:current().draft},context=await api('context',data);openModal('이번 요청에 전달하는 문맥',`<p><strong>${contextLabel(context)}</strong> · 이전 문답 ${context.includedTurns}회 포함 · ${context.droppedTurns}회 제외</p><p>기준: ${esc(context.tokenizer)} · 자료/질문 ${context.inputTextTokens} + 지침 ${context.instructionTokens}토큰. Codex 내부 문맥은 제외됩니다.<br>첨부 ${context.attachmentTokens} / ${context.attachmentTokenLimit}토큰<br>문제 원문 ${context.includesProblem?'포함':'제외'} · 첨부 ${context.files.length}개 · 표시 답변 한도 ${context.outputTokenLimit}토큰</p><details><summary>시험용 지침</summary><pre>${esc(context.instructions)}</pre></details><pre>${esc(context.input)}</pre>`);}catch(error){toast(error.message);}};
 $('sendButton').onclick=sendPrompt;
 $('prompt').addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();sendPrompt();}});
@@ -206,9 +236,11 @@ $('helpButton').onclick=()=>openModal('실전 연습실 이용 안내','<p><stro
 $('messages').onclick=async event=>{const target=event.target.closest('[data-message]');if(target){try{await navigator.clipboard.writeText(current().messages.find(m=>m.id===target.dataset.message).text);toast('답변을 복사했습니다.');}catch{toast('복사 권한이 없습니다. 답변을 선택해 복사하세요.');}}};
 $('dataBody').onclick=event=>{
   const target=event.target.closest('[data-download]');
-  if(target){const f=problems[session.current].files[Number(target.dataset.download)];if(f.id){const a=document.createElement('a');a.href=`/api/material/${f.id}`;a.download=f.name;a.click();}else download(f.name,'\uFEFF'+f.text,'text/plain;charset=utf-8');}
+  if(target&&!(editable()&&session.config.restrictCopy)){const f=problems[session.current].files[Number(target.dataset.download)];if(f.id){const a=document.createElement('a');a.href=`/api/material/${f.id}`;a.download=f.name;a.click();}else download(f.name,'\uFEFF'+f.text,'text/plain;charset=utf-8');}
 };
 window.addEventListener('pagehide',()=>{if(editable())fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json','X-Exam-Token':token},body:JSON.stringify(saveData()),keepalive:true}).catch(()=>{});});
+$('applyEnvironment').onclick=applyEnvironment;
+setInterval(()=>{if(session)renderState();},1000);
 setInterval(updateTimer,250);setInterval(poll,2000);
 try{boot=await api('bootstrap');token=boot.token;problems=boot.problems;merge(boot,{full:true});$('connection').textContent='Codex CLI 연결';const prepare=new URLSearchParams(location.search).get('problem');if(boot.catalog.some(p=>p.id===prepare)&&(!session||session.status==='submitted'))renderSetup();else{render();if(session?.status==='submitted')showResults();}}catch(error){$('loading').textContent=`연결할 수 없습니다. ${error.message}`;}
 
@@ -216,7 +248,7 @@ function fileCard(f,i){
   const meta=`${f.kind?.toUpperCase()||'자료'} · ${f.pages?f.pages.length+'페이지 · ':''}${(f.tokens??0).toLocaleString()}토큰`;
   const rows=!f.id&&f.kind==='csv'?f.text.trim().split(/\r?\n/).map(line=>line.split(',')):[];
   const table=rows.length?`<div class="table-wrap"><table><thead><tr>${rows[0].map(x=>`<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>${rows.slice(1).map(row=>`<tr>${row.map(x=>`<td>${esc(x)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`:'';
-  return `<article class="data-file"><header><div><h3>${esc(f.name)}</h3><span class="small-note">${meta}</span></div>${i!==undefined?`<button class="text-button" data-download="${i}">원본 다운로드 ↓</button>`:''}</header>${(f.warnings||[]).map(w=>`<p class="material-warning">${esc(w)}</p>`).join('')}${table}<details><summary>AI가 읽을 텍스트 확인</summary><pre class="material-text">${esc(f.text)}</pre></details></article>`;
+  return `<article class="data-file"><header><div><h3>${esc(f.name)}</h3><span class="small-note">${meta}</span></div>${i!==undefined&&!(editable()&&session.config.restrictCopy)?`<button class="text-button" data-download="${i}">원본 다운로드 ↓</button>`:''}</header>${(f.warnings||[]).map(w=>`<p class="material-warning">${esc(w)}</p>`).join('')}${table}<details><summary>AI가 읽을 텍스트 확인</summary><pre class="material-text">${esc(f.text)}</pre></details></article>`;
 }
 function renderLibrary(){
   const select=$('materialQuestion'),previous=select.value,available=boot.catalog||problems;
@@ -227,13 +259,13 @@ function renderLibrary(){
 }
 function renderData(){
   const p=problems[session.current];
-  $('dataBody').innerHTML=`<div class="material-intro"><strong>읽을 자료와 AI 첨부를 따로 선택하세요</strong><p>목록의 자료를 읽은 뒤, 오른쪽 ‘AI에 함께 전달’에서 선택하세요. PDF의 이미지·도표 자체는 AI에 전달되지 않습니다.</p><label class="upload-label">이 문항에 자료 추가<input id="examUpload" type="file" accept=".pdf,.csv,.txt,.md" multiple ${editable()?'':'disabled'}></label><span id="examUploadStatus" role="status" class="small-note"></span></div>`+p.files.map((f,i)=>fileCard(f,i)).join('');
+  $('dataBody').innerHTML=`<div class="material-intro"><strong>읽을 자료와 AI 첨부를 따로 선택하세요</strong><p>목록의 자료를 읽은 뒤, 오른쪽 ‘AI에 함께 전달’에서 선택하세요. PDF의 이미지·도표 자체는 AI에 전달되지 않습니다. ${session.config.allowUploads===false?'시작 후 새 자료 업로드는 잠겨 있습니다.':''}</p><label class="upload-label">이 문항에 자료 추가<input id="examUpload" type="file" accept=".pdf,.csv,.txt,.md" multiple ${editable()&&session.config.allowUploads!==false?'':'disabled'}></label><span id="examUploadStatus" role="status" class="small-note"></span></div>`+p.files.map((f,i)=>fileCard(f,i)).join('');
   $('examUpload').onchange=()=>uploadMaterials($('examUpload'),p.id,'examUploadStatus');
 }
 function renderAttachmentBudget(){
   const q=current(),p=problems[session.current],limit=session.config.attachmentTokenLimit??Math.min(3072,session.config.inputTokenLimit??4096);
-  const selected=p.files.filter(f=>q.attachments.includes(f.name)),tokens=selected.reduce((n,f)=>n+(f.tokens??0),0),over=tokens>limit;
-  $('attachmentBudget').textContent=`첨부 ${selected.length}개 · ${tokens.toLocaleString()} / ${limit.toLocaleString()}토큰${over?' · 한도 초과 — 자료 선택을 줄이세요':` · 잔여 ${(limit-tokens).toLocaleString()}토큰`}`;
+  const selected=p.files.filter(f=>q.attachments.includes(f.name)),tokens=selected.reduce((n,f)=>n+(f.tokens??0),0),over=tokens>limit||selected.length>(session.config.attachmentFileLimit??20)||selected.some(f=>(f.size??new TextEncoder().encode(f.text).length)>(session.config.fileSizeLimitMB??10)*1024*1024||(f.pages?.length??0)>(session.config.pdfPageLimit??100));
+  $('attachmentBudget').textContent=`첨부 ${selected.length} / ${session.config.attachmentFileLimit??20}개 · ${tokens.toLocaleString()} / ${limit.toLocaleString()}토큰${over?' · 한도 초과 — 자료 선택을 줄이세요':` · 잔여 ${(limit-tokens).toLocaleString()}토큰`}`;
   $('attachmentBudget').classList.toggle('over',over);$('attachmentProgress').max=limit||1;$('attachmentProgress').value=Math.min(tokens,limit||1);
   return over;
 }
@@ -242,16 +274,16 @@ async function uploadMaterials(input,problemId,statusId){
   let added=0;
   try{
     for(const file of files){
-      if(file.size>10*1024*1024)throw new Error(`${file.name}: 파일당 최대 10MB입니다.`);
+      if(file.size>(statusId==='examUploadStatus'?(session.config.fileSizeLimitMB??10):10)*1024*1024)throw new Error(`${file.name}: 설정된 파일 크기 한도를 초과했습니다.`);
       $(statusId).textContent=`${file.name} 분석 중…`;
       const base64=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file);});
-      const result=await api('materials',{problemId,name:file.name,base64});problems=result.problems;boot.catalog=result.catalog;added++;
+      const result=await api('materials',{sessionId:session?.id,problemId,name:file.name,base64});problems=result.problems;boot.catalog=result.catalog;added++;
     }
     $(statusId).textContent=`${added}개 추가 완료. AI 첨부는 별도로 선택하세요.`;
     if(statusId==='uploadStatus')renderLibrary();
     else {await queueSave();renderQuestion();renderState();toast(`${added}개 자료 추가 완료. AI에 보낼 자료를 선택하세요.`);}
   }catch(error){toast(error.message);$(statusId).textContent=`${added}개 추가됨 · ${error.message}`;if(statusId==='uploadStatus')renderLibrary();else if(added){renderQuestion();renderState();}}
-  finally{input.disabled=false;input.value='';}
+  finally{input.disabled=statusId==='examUploadStatus'&&(!editable()||session.config.allowUploads===false);input.value='';}
 }
 $('materialQuestion').onchange=renderLibrary;
 $('setupUpload').onchange=()=>uploadMaterials($('setupUpload'),$('materialQuestion').value,'uploadStatus');
@@ -262,3 +294,5 @@ function updateSelectionSummary(){
   $('selectedCount').textContent=selected.length;$('selectedPoints').textContent=selected.reduce((n,p)=>n+p.points,0);$('selectedMinutes').textContent=selected.reduce((n,p)=>n+p.minutes,0);
 }
 $('problemList').onchange=updateSelectionSummary;
+
+for(const id of ['problemBody','dataBody']){for(const type of ['copy','cut','dragstart'])$(id).addEventListener(type,event=>{if(editable()&&session.config.restrictCopy){event.preventDefault();toast('문제·자료 복사 제한 중입니다. AI에 함께 전달할 자료를 선택하세요.');}});}
