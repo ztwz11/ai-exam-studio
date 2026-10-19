@@ -60,6 +60,7 @@ export function round2Instructions(spec){
   const track=ROUND2_TRACKS.find(t=>t.id===spec.track),output=ROUND2_OUTPUTS.find(t=>t.id===spec.output);
   return `\n[2차 대비 독자 제작 미션 규격]
 공식 FAQ에서 확인된 방향은 데이터 활용 AI 문제 해결과 문제 정의·해결 과정 평가뿐이다. 실제 2차 시험, 기출, 공식 플랫폼 재현이나 적중 문제라고 주장하지 않는다. ${spec.minutes}분·${spec.points}점과 자료 예산은 연습 설정이다. 반도체 지식을 전제하지 말고 제공 자료에서 필요한 도메인 규칙을 설명한다.
+문제와 첨부의 설명 문장은 모두 자연스러운 한국어로 작성한다. 코드·식별자·기술 용어의 영문은 허용하되 다른 언어의 안내 문단을 섞지 않는다.
 유형: ${track.label}. ${track.focus}
 주 산출물: ${output.label}. Python이면 표준 라이브러리만으로 data.csv를 읽는 산출물을 요구한다. 의사코드/보고서는 수작업으로 검산 가능한 결과·검증표를 요구한다. 웹앱 제작·설치·외부 서비스 접속은 요구하지 않는다.
 정확히 4개 파일: data.csv(헤더 1행과 정확히 ${spec.dataRows}개의 데이터 행), data_dictionary.md(열·단위·결측·식별자·시간 정의), requirements.md(현업 요청·성공 조건·제약·이해관계), baseline.md(검증 대상 AI 초안과 정답 없는 검증 입력 사례).
